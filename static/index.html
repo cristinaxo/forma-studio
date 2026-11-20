@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Forma — Your local audio studio</title>
+  <meta name="description" content="An independent audio workspace. Record, transform voices, separate stems, and master tracks on your own computer.">
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="Forma home"><span class="brand-symbol">≋</span> forma<span class="brand-dot">.</span></a>
+    <div class="workspace"><div class="workspace-avatar">Y</div><div>Your workspace<small>Personal · On this Mac</small></div><span class="local-dot"></span></div>
+    <div class="nav-label">WORKSPACE</div>
+    <nav>
+      <button class="nav-item active" id="nav-studio"><span data-icon="sliders"></span>Studio<span class="nav-plus">↗</span></button>
+      <button class="nav-item" id="nav-projects"><span data-icon="folder"></span>My projects<span class="count" id="project-count">0</span></button>
+    </nav>
+    <div class="nav-label tools-label">YOUR TOOLS</div>
+    <button class="nav-item tool-nav" data-tool="voice"><span data-icon="mic"></span>Voice conversion</button>
+    <button class="nav-item tool-nav" data-tool="stems"><span data-icon="layers"></span>Stem splitter</button>
+    <button class="nav-item tool-nav" data-tool="master"><span data-icon="spark"></span>Mastering</button>
+    <div class="sidebar-bottom">
+      <div class="local-card"><span class="mini-orbit">◎</span><strong>Your sound. Your machine.</strong><p>Local processing.<br>No credits. No API subscriptions.</p><button id="engine-button">Engine details <span>↗</span></button></div>
+      <button class="nav-item" id="roadmap-button"><span data-icon="map"></span>What’s next<span class="tiny-badge">02</span></button>
+      <div class="user"><span class="user-avatar">Y</span><div>Your local studio<small>Phase 01 · Core studio</small></div></div>
+    </div>
+  </aside>
+  <main>
+    <header class="topbar"><div class="crumb">Workspace <span>/</span> <b id="breadcrumb">Studio</b></div><div class="top-actions"><span class="status-pill" id="engine-status"><i></i> Connecting to engine</span><button class="icon-button" id="help-button" aria-label="Studio help" data-icon="help"></button></div></header>
+    <div class="page" id="studio-view">
+      <div class="page-heading"><div><div class="eyebrow">A LITTLE POSSIBILITY. A LOT OF SOUND.</div><h1>Make room for your sound<span>.</span></h1><p>Take your next idea from a rough recording to something worth playing.</p></div><button class="secondary new-session" id="new-session"><span data-icon="plus"></span>New session</button></div>
+      <section class="tool-cards" aria-label="Audio tools">
+        <button class="tool-card" data-tool="voice"><div class="tool-icon voice-icon" data-icon="mic"></div><div><strong>Voice conversion</strong><p>A new voice. Your performance.</p></div><span class="card-arrow">↗</span></button>
+        <button class="tool-card" data-tool="stems"><div class="tool-icon stem-icon" data-icon="layers"></div><div><strong>Stem splitter</strong><p>Find the parts inside the song.</p></div><span class="card-arrow">↗</span></button>
+        <button class="tool-card selected" data-tool="master"><div class="tool-icon master-icon" data-icon="spark"></div><div><strong>Mastering</strong><p>Give your mix its finishing touch.</p></div><span class="card-arrow">↗</span></button>
+      </section>
+      <div class="studio-grid">
+        <section class="input-panel panel">
+          <div class="panel-heading"><div><span class="step">01</span><h2>Your audio</h2></div><span class="panel-meta" id="file-limit">UP TO 3 MINUTES</span></div>
+          <div class="drop-area" id="drop-area" tabindex="0" role="button" aria-label="Upload an audio file">
+            <div class="upload-mark"><span data-icon="wave"></span><span class="upload-plus">+</span></div>
+            <h3>A great track starts here.</h3><p>Drop your audio here, or choose a file to get started.</p>
+            <button class="dark-button" id="upload-button"><span data-icon="upload"></span>Choose audio</button>
+            <small>WAV, MP3, FLAC, M4A &amp; more · up to 50 MB</small>
+          </div>
+          <input type="file" accept="audio/*,.wav,.flac,.m4a,.webm" id="audio-file" hidden>
+          <div id="loaded-audio" hidden>
+            <div class="loaded-heading"><span class="file-icon" data-icon="music"></span><div><strong id="file-name"></strong><small id="file-info"></small></div><button class="icon-button" id="remove-file" aria-label="Remove audio" data-icon="close"></button></div>
+            <div class="waveform-box"><canvas id="waveform" aria-label="Waveform of your uploaded audio"></canvas><div class="waveform-label"><span>ORIGINAL</span><span id="duration-label">00:00</span></div></div>
+            <audio id="input-player" controls preload="metadata"></audio>
+          </div>
+          <div class="record-row"><span class="record-copy" id="record-copy">Or catch an idea while it’s fresh.</span><button class="record-button" id="record-button"><span class="record-dot"></span><span id="record-label">Record audio</span></button></div>
+          <div class="reference-section" id="reference-section" hidden><div><span data-icon="mic"></span><strong>Reference voice</strong><span>3–30 seconds</span></div><p>Add a clean recording of a voice you have permission to use.</p><label class="reference-upload" for="reference-file"><span data-icon="upload"></span><span id="reference-label">Choose reference audio</span></label><input type="file" id="reference-file" accept="audio/*" hidden><audio id="reference-player" controls hidden></audio></div>
+          <div class="session-name"><label for="project-name">SESSION NAME</label><input id="project-name" maxlength="100" placeholder="Give this idea a name…"></div>
+          <div class="privacy-line"><span data-icon="shield"></span>Your recordings and results stay on this computer.</div>
+        </section>
+        <section class="settings-panel panel">
+          <div class="panel-heading"><div><span class="step">02</span><h2 id="settings-title">Make it shine</h2></div><span data-icon="sliders"></span></div>
+          <div id="master-settings"><label class="field-label">CHOOSE A CHARACTER</label><div class="presets">
+            <button class="preset selected" data-preset="balanced"><span data-icon="balance"></span><strong>Balanced</strong><small>Clean &amp; natural</small><i></i></button>
+            <button class="preset" data-preset="warm"><span data-icon="sun"></span><strong>Warm</strong><small>Full &amp; rounded</small><i></i></button>
+            <button class="preset" data-preset="bright"><span data-icon="spark"></span><strong>Bright</strong><small>Airy &amp; open</small><i></i></button>
+            <button class="preset" data-preset="punch"><span data-icon="bolt"></span><strong>Punchy</strong><small>Bold &amp; present</small><i></i></button>
+          </div><div class="loudness-heading"><label class="field-label" for="loudness">TARGET LOUDNESS</label><span><b id="loudness-value">−14</b> LUFS</span></div><input id="loudness" type="range" min="-20" max="-9" value="-14" step="1"><div class="range-labels"><span>More dynamic</span><span>Louder</span></div><p class="setting-note">EQ, gentle compression, and a −1 dBTP ceiling. Actual loudness is measured after processing.</p></div>
+          <div id="stems-settings" hidden><label class="field-label">FOUR PARTS. MORE POSSIBILITIES.</label><div class="stem-list"><div><span>01</span>Vocals<span data-icon="mic"></span></div><div><span>02</span>Drums<span data-icon="circle"></span></div><div><span>03</span>Bass<span data-icon="wave"></span></div><div><span>04</span>Other instruments<span data-icon="music"></span></div></div><p class="setting-note">Demucs separates your mix into four individual WAV files. Processing runs locally and can take several minutes.</p></div>
+          <div id="voice-settings" hidden><label class="field-label" for="voice-mode">PERFORMANCE TYPE</label><select id="voice-mode"><option value="speech">Speech</option><option value="singing">Singing · preserve melody</option></select><label class="field-label" for="voice-steps">DETAIL LEVEL</label><select id="voice-steps"><option value="6">Draft · 6 steps</option><option value="10" selected>Standard · 10 steps</option><option value="20">Detailed · 20 steps</option><option value="30">Fine · 30 steps</option></select><label class="field-label" for="pitch">SINGING PITCH SHIFT</label><select id="pitch"><option value="0">Original key</option><option value="-12">−12 semitones</option><option value="-5">−5 semitones</option><option value="5">+5 semitones</option><option value="12">+12 semitones</option></select><p class="setting-note">Seed-VC uses your reference recording to transform the voice. Start with a short, clean clip. Up to 30 seconds.</p></div>
+          <div class="output-format"><div><span data-icon="file"></span><strong>Lossless WAV</strong></div><span id="output-detail">24-bit output</span></div>
+          <button class="process-button" id="process-button" disabled><span data-icon="spark"></span><span id="process-label">Master this track</span><span>↗</span></button>
+          <div class="processing-footnote"><span class="local-dot"></span>Runs locally · no usage credits</div>
+        </section>
+      </div>
+      <section id="active-result" class="active-result" hidden aria-live="polite"></section>
+      <section class="recent-section"><div class="section-heading"><h2>Recent sessions</h2><button class="text-button" id="view-all">View all projects <span>↗</span></button></div><div id="recent-list"></div></section>
+      <footer><span>Made for the ideas that won’t leave you alone.</span><span>FORMA STUDIO <span class="footer-cross">✳</span> LOCAL FIRST</span></footer>
+    </div>
+    <div class="page" id="projects-view" hidden><div class="page-heading"><div><div class="eyebrow">YOUR WORK, ALL IN ONE PLACE</div><h1>My projects<span>.</span></h1><p>Every take, every transformation. Saved on your computer.</p></div><button class="secondary" id="back-studio"><span data-icon="plus"></span>New session</button></div><div class="search-wrap"><span data-icon="search"></span><input id="project-search" type="search" placeholder="Find a project…" aria-label="Search projects"></div><div id="projects-list"></div></div>
+  </main>
+  <div id="toast" class="toast" role="alert" hidden></div>
+  <dialog id="info-dialog"><button class="icon-button dialog-close" aria-label="Close dialog" data-icon="close"></button><div id="dialog-content"></div></dialog>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

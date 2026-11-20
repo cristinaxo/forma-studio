@@ -1,0 +1,10 @@
+/.venv/
+/data/
+/.models/
+/.runtime/
+__pycache__/
+.pytest_cache/
+*.log
+.DS_Store
+.env*
+/vendor/seed-vc/checkpoints/
