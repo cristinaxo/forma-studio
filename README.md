@@ -12,9 +12,9 @@ If the folder is moved or copied to another Mac, run **setup.command** to instal
 
 - Upload common audio formats or record from the microphone with browser permission.
 - Preview the actual input waveform and listen before processing.
-- Voice conversion using a clean reference voice, powered by Seed-VC. Speech and singing modes, diffusion detail, and singing pitch shift.
+- Voice conversion using a clean reference voice, powered by Seed-VC. Speech and singing modes, diffusion detail from 6 to 50 steps, singing pitch shift at every semitone from -12 to +12, and a take seed. Both the source and the reference are loudness-normalised to the same level before inference, so input level differences stop changing the result. Seed, steps, mode, pitch, device and the Seed-VC checkpoint are recorded in the session, so a take can be reproduced exactly. Seed-VC runs as a separate command-line process, not as an imported module.
 - Four-stem separation using Demucs: vocals, drums, bass, and other instruments.
-- Local mastering: high-pass filtering, tonal EQ, stereo-linked compression, loudness targeting, lookahead limiting and a 4x oversampled peak check. This is signal processing, not a generative AI model. Reports achieved LUFS and estimated true peak.
+- Local mastering: 25 Hz high-pass, a 120 Hz bell, a high shelf for air, a stereo-linked compressor with a real attack/release envelope follower, and a lookahead peak limiter that detects peaks on a 4x oversampled signal so intersample overshoot is handled inside the limiter rather than by trimming the whole track afterwards. The ceiling is -1.0 dBTP. A loudness loop raises pre-gain and re-limits while the target is still out of reach and the limiter is working under a 6 dB gain-reduction cap, up to four passes. This is signal processing, not a generative AI model. Reports the achieved LUFS, true peak, maximum gain reduction, and whether the target was actually reached. When it was not, the result panel says so instead of quietly missing.
 - Persistent sessions, one-at-a-time processing queue, cancellation, source/result comparison, individual lossless WAV downloads, project search and deletion.
 
 Limits: 50 MB per input; 180 seconds for mastering and stems; 30 seconds for voice conversion; reference voice 3–30 seconds. These bounds keep the initial CPU implementation manageable. A maximum of three queued/running jobs is accepted. Processing stops after one hour if an engine stalls. Voice conversion quality depends on source, reference, and inference settings. Longer or finer runs can be slow.
@@ -38,7 +38,7 @@ The first installation used a workspace-local Python 3.10 runtime outside this f
 
 This version binds only to loopback and is designed for one local user. It rejects foreign Host and Origin headers. It is not an internet-facing, authenticated multi-user service. Do not change the bind address without adding an appropriate access-control layer.
 
-The conservative default inference device is CPU. Seed-VC has upstream Apple Silicon support, but this app's tested baseline is CPU. An advanced deployment can set `FORMA_VOICE_DEVICE=mps` after validating that device separately. Future GPU acceleration does not require changing the interface.
+The default inference device is CPU, and it stays CPU because mps was tested and does not work for singing conversion. On this machine `FORMA_VOICE_DEVICE=mps` fails in the upstream Seed-VC pitch path at `inference.py` (`F0_ori = torch.from_numpy(F0_ori).to(device)`) with `Cannot convert a MPS Tensor to float64 dtype`: the RMVPE pitch extractor returns float64, which the MPS backend cannot hold. It fails before inference starts, so there is no partial or degraded output, and `PYTORCH_ENABLE_MPS_FALLBACK=1` does not rescue it because the problem is the tensor dtype rather than a missing operator. Speech conversion on mps was not tested. The `FORMA_VOICE_DEVICE` override still works for anyone who wants to try another device; it is simply not the default. Future GPU acceleration does not require changing the interface.
 
 ## Tests
 
@@ -46,7 +46,7 @@ The conservative default inference device is CPU. Seed-VC has upstream Apple Sil
 .venv/bin/python -m pytest -q
 ```
 
-The test suite verifies mastering output properties, silence and settings validation, origin/host restrictions, invalid audio rejection, reference requirements and duration limits. Real model smoke checks are separate from unit tests because they download weights and are slower.
+The test suite verifies mastering output properties, the limiter gain curve moving no more than 0.1 dB between adjacent samples, the 4x oversampled true peak staying at or under -1.0 dBTP, the loudness loop either reaching its target or reporting that it could not, silence and settings validation, origin/host restrictions (including that a `testserver` Host is rejected unless a test widens the allowlist), a non-numeric Content-Length returning 400, the queue refusing a fourth concurrent job, invalid audio rejection, reference requirements and duration limits. Real model smoke checks are separate from unit tests because they download weights and are slower.
 
 ## Next phases
 

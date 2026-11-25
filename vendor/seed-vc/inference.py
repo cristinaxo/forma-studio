@@ -26,7 +26,10 @@ from hf_utils import load_custom_model_from_hf
 
 # Load model and configuration
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-if torch.cuda.is_available():
+_forma_device = os.environ.get("FORMA_VOICE_DEVICE")
+if _forma_device:
+    device = torch.device(_forma_device)
+elif torch.cuda.is_available():
     device = torch.device("cuda")
 elif torch.backends.mps.is_available():
     device = torch.device("mps")
@@ -255,6 +258,13 @@ def crossfade(chunk1, chunk2, overlap):
 
 @torch.no_grad()
 def main(args):
+    seed = getattr(args, "seed", None)
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
     model, semantic_fn, f0_fn, vocoder_fn, campplus_model, mel_fn, mel_fn_args = load_models(args)
     sr = mel_fn_args['sampling_rate']
     f0_condition = args.f0_condition
@@ -421,5 +431,6 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint", type=str, help="Path to the checkpoint file", default=None)
     parser.add_argument("--config", type=str, help="Path to the config file", default=None)
     parser.add_argument("--fp16", type=str2bool, default=True)
+    parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args()
     main(args)

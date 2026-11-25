@@ -10,9 +10,92 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
-import sys, json, argparse
+import sys, json, argparse, shutil, subprocess
 import numpy as np
 import soundfile as sf
+
+# Seed-VC resolves these from the Hugging Face repository when no checkpoint is
+# passed. Recorded per job so a take can be reproduced against the same weights.
+VOICE_CHECKPOINTS = {
+    "speech": "DiT_seed_v2_uvit_whisper_small_wavenet_bigvgan_pruned.pth",
+    "singing": "DiT_seed_v2_uvit_whisper_base_f0_44k_bigvgan_pruned_ft_ema_v2.pth",
+}
+# CPU is the portable baseline. mps is selected per machine after validating it.
+DEFAULT_VOICE_DEVICE = "cpu"
+DEFAULT_SEED = 1234
+LENGTH_ADJUST = 1.0
+INFERENCE_CFG_RATE = 0.7
+# Both inputs are matched to this level so a quiet source or a hot reference
+# stops changing the conversion.
+NORMALISE_LUFS = -20.0
+NORMALISE_PEAK = 0.95
+
+
+def normalise_loudness(source, dest, target_lufs=NORMALISE_LUFS):
+    """Write dest at target_lufs integrated, backing off rather than clipping."""
+    import pyloudnorm as pyln
+    audio, sr = sf.read(str(source), always_2d=True, dtype="float64")
+    measured = pyln.Meter(sr).integrated_loudness(audio)
+    gain = 10 ** ((target_lufs - measured) / 20) if np.isfinite(measured) else 1.0
+    peak = float(np.max(np.abs(audio))) * gain
+    if peak > NORMALISE_PEAK:
+        gain *= NORMALISE_PEAK / peak
+    sf.write(str(dest), audio * gain, sr, subtype="PCM_24")
+    return {"measured_lufs": round(float(measured), 2) if np.isfinite(measured) else None,
+            "applied_gain_db": round(20 * float(np.log10(max(gain, 1e-12))), 2)}
+
+
+def run_voice(args, out):
+    vendor = ROOT / "vendor" / "seed-vc"
+    if not (vendor / "inference.py").exists():
+        raise RuntimeError("Seed-VC is not installed. Run setup.command first.")
+    device = os.environ.get("FORMA_VOICE_DEVICE") or DEFAULT_VOICE_DEVICE
+    prepared = out / "prepared"
+    prepared.mkdir(parents=True, exist_ok=True)
+    source, reference = prepared / "source.wav", prepared / "reference.wav"
+    source_level = normalise_loudness(args.source, source)
+    reference_level = normalise_loudness(args.reference, reference)
+
+    # Seed-VC is GPL-3.0. Forma invokes it as a separate command-line program
+    # rather than importing it, so the two code bases stay separable.
+    command = [sys.executable, "-u", "inference.py",
+               "--source", str(source.resolve()), "--target", str(reference.resolve()),
+               "--output", str(out.resolve()),
+               "--diffusion-steps", str(args.steps),
+               "--length-adjust", str(LENGTH_ADJUST),
+               "--inference-cfg-rate", str(INFERENCE_CFG_RATE),
+               "--f0-condition", "True" if args.mode == "singing" else "False",
+               "--auto-f0-adjust", "False",
+               "--semi-tone-shift", str(args.pitch),
+               "--fp16", "False",
+               "--seed", str(args.seed)]
+    environment = dict(os.environ)
+    environment["FORMA_VOICE_DEVICE"] = device
+    environment.setdefault("OMP_NUM_THREADS", str(min(4, os.cpu_count() or 2)))
+    environment["PYTHONPATH"] = os.pathsep.join(
+        [str(vendor)] + ([environment["PYTHONPATH"]] if environment.get("PYTHONPATH") else []))
+    print(f"Loading local Seed-VC models on {device}. First use downloads model weights.", flush=True)
+    completed = subprocess.run(command, cwd=str(vendor), env=environment)
+    if completed.returncode != 0:
+        raise RuntimeError(f"Seed-VC inference exited with code {completed.returncode}")
+
+    # inference.py names its file from the inputs and settings, so the result is
+    # addressed directly instead of being picked out of a glob.
+    produced = out / (f"vc_{source.stem}_{reference.stem}_{LENGTH_ADJUST}"
+                      f"_{args.steps}_{INFERENCE_CFG_RATE}.wav")
+    if not produced.is_file():
+        raise RuntimeError("Voice engine returned no audio")
+    produced.replace(out / "converted-voice.wav")
+    shutil.rmtree(prepared, ignore_errors=True)
+    (out / "analysis.json").write_text(json.dumps({
+        "seed": args.seed, "steps": args.steps, "mode": args.mode, "pitch": args.pitch,
+        "device": device, "checkpoint": VOICE_CHECKPOINTS[args.mode],
+        "length_adjust": LENGTH_ADJUST, "inference_cfg_rate": INFERENCE_CFG_RATE,
+        "normalise_lufs": NORMALISE_LUFS,
+        "source_level": source_level, "reference_level": reference_level,
+    }))
+    print("Voice conversion complete", flush=True)
+
 
 def run(args):
     out = Path(args.output)
@@ -52,31 +135,7 @@ def run(args):
             sf.write(out / f"{name}.wav", samples.T.numpy(), model.samplerate, subtype="PCM_24")
         print("All four stems are ready", flush=True)
     elif args.tool == "voice":
-        import torch
-        from types import SimpleNamespace
-        vendor = ROOT / "vendor" / "seed-vc"
-        if not (vendor / "inference.py").exists():
-            raise RuntimeError("Seed-VC is not installed. Run setup.command first.")
-        sys.path.insert(0, str(vendor))
-        os.chdir(vendor)
-        import inference
-        # CPU is a reliable portable baseline; a tested GPU can be selected
-        # explicitly without silently failing over mid-job.
-        device = os.environ.get("FORMA_VOICE_DEVICE", "cpu")
-        inference.device = torch.device(device)
-        torch.set_num_threads(min(4, os.cpu_count() or 2))
-        print("Loading local Seed-VC models. First use downloads model weights.", flush=True)
-        inference.main(SimpleNamespace(
-            source=str(Path(args.source).resolve()), target=str(Path(args.reference).resolve()),
-            output=str(out.resolve()), diffusion_steps=args.steps, length_adjust=1.0,
-            inference_cfg_rate=.7, f0_condition=args.mode == "singing", auto_f0_adjust=False,
-            semi_tone_shift=args.pitch, checkpoint=None, config=None, fp16=False,
-        ))
-        files = list(out.glob("*.wav"))
-        if not files:
-            raise RuntimeError("Voice engine returned no audio")
-        files[0].rename(out / "converted-voice.wav")
-        print("Voice conversion complete", flush=True)
+        run_voice(args, out)
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
@@ -89,4 +148,5 @@ if __name__ == "__main__":
     p.add_argument("--steps", type=int, default=10)
     p.add_argument("--pitch", type=int, default=0)
     p.add_argument("--mode", choices=["speech", "singing"], default="speech")
+    p.add_argument("--seed", type=int, default=DEFAULT_SEED)
     run(p.parse_args())
