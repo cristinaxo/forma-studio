@@ -49,6 +49,9 @@ function selectTool(tool) {
  $('#output-detail').textContent=tool==='voice'?'Local voice model':tool==='stems'?'4 individual stems':'24-bit output';
  updateButton();
 }
+const DEFAULT_STEPS={speech:'10',singing:'30'};
+function applyModeDefaults(){const mode=$('#voice-mode').value;$('#voice-steps').value=DEFAULT_STEPS[mode]||'10';}
+function newSeed(){$('#seed').value=String(Math.floor(Math.random()*2147483647));}
 function updateButton(){ $('#process-button').disabled=!state.file || state.submitting || state.recording || (state.tool==='voice'&&!state.reference) || !state.engine; }
 function clearFile(){state.file=null;state.buffer=null;$('#audio-file').value='';$('#loaded-audio').hidden=true;$('#drop-area').hidden=false;$('#input-player').pause();$('#input-player').removeAttribute('src');if(state.objectURL)URL.revokeObjectURL(state.objectURL);state.objectURL=null;updateButton();}
 async function loadFile(file) {
@@ -81,7 +84,7 @@ async function processAudio(){
  const limit=state.tool==='voice'?30:180;
  if(state.buffer?.duration>limit)return toast(`This tool accepts clips up to ${limit} seconds. Choose a shorter file.`);
  state.submitting=true;updateButton();$('#process-label').textContent='Preparing your audio…';
- const data=new FormData();data.append('source',state.file);data.append('tool',state.tool);data.append('title',$('#project-name').value);data.append('preset',state.preset);data.append('target',$('#loudness').value);data.append('steps',$('#voice-steps').value);data.append('pitch',$('#pitch').value);data.append('mode',$('#voice-mode').value);if(state.tool==='voice'&&state.reference)data.append('reference',state.reference);
+ const data=new FormData();data.append('source',state.file);data.append('tool',state.tool);data.append('title',$('#project-name').value);data.append('preset',state.preset);data.append('target',$('#loudness').value);data.append('steps',$('#voice-steps').value);data.append('pitch',$('#pitch').value);data.append('mode',$('#voice-mode').value);data.append('seed',$('#seed').value);if(state.tool==='voice'&&state.reference)data.append('reference',state.reference);
  try{const item=await api('/api/projects',{method:'POST',body:data});state.active=item;renderResult(item);await refresh();$('#active-result').scrollIntoView({behavior:'smooth',block:'nearest'});}catch(e){toast(e.message);}finally{state.submitting=false;selectTool(state.tool);}
 }
 function renderResult(item){
@@ -91,7 +94,8 @@ function renderResult(item){
  const stats=item.analysis;
  el.innerHTML=`<div class="result-heading"><div class="result-indicator">${working?'<span class="spinner"></span>':`<span style="color:#8fa861">${icon(item.status==='success'?'check':'wave')}</span>`}<div><h2>${escapeHTML(item.title)}</h2><p>${toolNames[item.tool]} · ${working?(item.status==='queued'?'In the local queue':`Processing · ${time(elapsed)} elapsed`):escapeHTML(item.status==='success'?'Your audio is ready':item.status)}</p></div></div>${working?'<button class="secondary" id="cancel-job">Stop job</button>':'<button class="icon-button" id="close-result" aria-label="Close result">'+icon('close')+'</button>'}</div>
  ${item.status!=='success'?`<p class="result-message ${item.status==='error'?'error':''}">${escapeHTML(item.message)}</p>${working?'<p class="result-note">You can keep working while this runs. The first use of a model may download its weights. Your audio stays local.</p>':''}`:''}
- ${stats?`<div class="stats-row"><div>Original loudness<b>${stats.input_lufs} <small>LUFS</small></b></div><div>Mastered loudness<b>${stats.output_lufs} <small>LUFS</small></b></div><div>True peak estimate<b>${stats.true_peak_dbtp} <small>dBTP</small></b></div></div>`:''}
+ ${stats&&stats.seed!=null?`<div class="stats-row"><div>Take seed<b>${stats.seed}</b></div><div>Detail<b>${stats.steps} <small>STEPS</small></b></div><div>Pitch<b>${stats.pitch>0?'+':''}${String(stats.pitch).replace('-','−')} <small>ST</small></b></div><div>Device<b>${escapeHTML(String(stats.device).toUpperCase())}</b></div></div><p class="result-note">Reproduce this take with the same seed, detail, mode, pitch and device. Checkpoint: ${escapeHTML(stats.checkpoint||'—')}.</p>`:''}
+ ${stats&&stats.input_lufs!=null?`<div class="stats-row"><div>Original loudness<b>${stats.input_lufs} <small>LUFS</small></b></div><div>Mastered loudness<b>${stats.output_lufs} <small>LUFS</small></b></div><div>True peak estimate<b>${stats.true_peak_dbtp} <small>dBTP</small></b></div>${stats.max_gain_reduction_db==null?'':`<div>Max gain reduction<b>${stats.max_gain_reduction_db} <small>dB</small></b></div>`}</div>${stats.target_reached===false?`<p class="result-note">The ${stats.target_lufs} LUFS target was not reachable without over-limiting, so this master stops at ${stats.output_lufs} LUFS and keeps its transients.</p>`:''}`:''}
  ${(item.outputs||[]).length?`<div class="output-track"><div>Original<small>Compare your source</small></div><audio controls preload="metadata" src="${escapeHTML(item.source_url)}"></audio><a href="${escapeHTML(item.source_url)}" download="original.wav" aria-label="Download original">${icon('download')}</a></div>`:''}
  ${(item.outputs||[]).map(o=>`<div class="output-track"><div>${escapeHTML(o.name)}<small>${time(o.duration)} · WAV · ${(o.bytes/1024/1024).toFixed(1)} MB</small></div><audio controls preload="metadata" src="${escapeHTML(o.url)}"></audio><a href="${escapeHTML(o.url)}" download="${escapeHTML(o.file)}" aria-label="Download ${escapeHTML(o.name)}">${icon('download')}</a></div>`).join('')}`;
  $('#cancel-job')?.addEventListener('click',async()=>{try{await api(`/api/projects/${item.id}/cancel`,{method:'POST'});await refresh();}catch(e){toast(e.message);}});
@@ -120,6 +124,9 @@ async function heartbeat(){try{state.engine=await api('/api/status');$('#engine-
 $$('[data-tool]').forEach(b=>b.addEventListener('click',()=>selectTool(b.dataset.tool)));
 $$('[data-preset]').forEach(b=>b.addEventListener('click',()=>{state.preset=b.dataset.preset;$$('[data-preset]').forEach(x=>x.classList.toggle('selected',x===b));}));
 $('#loudness').addEventListener('input',e=>$('#loudness-value').textContent=e.target.value.replace('-','−'));
+$('#pitch').addEventListener('input',e=>$('#pitch-value').textContent=(e.target.value>0?'+':'')+e.target.value.replace('-','−'));
+$('#voice-mode').addEventListener('change',applyModeDefaults);
+$('#new-take').addEventListener('click',newSeed);
 $('#upload-button').onclick=e=>{e.stopPropagation();$('#audio-file').click();};
 $('#drop-area').onclick=()=>$('#audio-file').click();$('#drop-area').onkeydown=e=>{if(['Enter',' '].includes(e.key)){e.preventDefault();$('#audio-file').click();}};
 $('#audio-file').onchange=e=>loadFile(e.target.files[0]);
@@ -129,7 +136,7 @@ $('#drop-area').ondrop=e=>{e.preventDefault();$('#drop-area').classList.remove('
 $('#remove-file').onclick=clearFile;
 $('#reference-file').onchange=e=>{const file=e.target.files[0];if(!file)return;if(file.size>50*1024*1024){e.target.value='';return toast('Reference audio must be under 50 MB.');}state.reference=file;if(state.referenceURL)URL.revokeObjectURL(state.referenceURL);state.referenceURL=URL.createObjectURL(file);$('#reference-label').textContent=file.name;$('#reference-player').src=state.referenceURL;$('#reference-player').hidden=false;updateButton();};
 $('#record-button').onclick=record;$('#process-button').onclick=processAudio;
-function newSession(){if(state.recording||state.submitting)return;clearFile();state.reference=null;$('#reference-file').value='';$('#reference-label').textContent='Choose reference audio';$('#reference-player').pause();$('#reference-player').hidden=true;if(state.referenceURL)URL.revokeObjectURL(state.referenceURL);state.referenceURL=null;$('#project-name').value='';state.active=null;$('#active-result').hidden=true;showView('studio');}
+function newSession(){if(state.recording||state.submitting)return;clearFile();state.reference=null;$('#reference-file').value='';$('#reference-label').textContent='Choose reference audio';$('#reference-player').pause();$('#reference-player').hidden=true;if(state.referenceURL)URL.revokeObjectURL(state.referenceURL);state.referenceURL=null;$('#project-name').value='';$('#pitch').value='0';$('#pitch-value').textContent='0';applyModeDefaults();state.active=null;$('#active-result').hidden=true;showView('studio');}
 $('#new-session').onclick=newSession;$('#back-studio').onclick=newSession;$('#nav-studio').onclick=()=>showView('studio');$('#nav-projects').onclick=()=>showView('projects');$('#view-all').onclick=()=>showView('projects');$('#project-search').oninput=renderProjects;
 $('#engine-button').onclick=engineDialog;
 $('#help-button').onclick=()=>dialog('<div class="eyebrow">FIND YOUR FLOW</div><h2>From an idea to a track.</h2><p>1. Choose a tool, then upload or record audio.<br>2. Set the character, stems, or reference voice.<br>3. Start processing. Listen and download the results.</p><p>Mastering and stem splitting accept up to 3 minutes. Voice conversion accepts up to 30 seconds, with a clean 3–30 second reference recording.</p><p>Every completed session is saved in My projects. Keep this local server running while processing. You can close the browser and return later.</p>');

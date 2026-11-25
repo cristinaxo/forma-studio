@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import soundfile as sf
 import imageio_ffmpeg
+from process_audio import DEFAULT_VOICE_DEVICE as VOICE_DEVICE
 
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("FORMA_DATA_DIR", str(ROOT / "data")))
@@ -17,6 +18,16 @@ LOCK = threading.RLock()
 EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 PROCESSES = {}
 ALLOWED_TOOLS = {"master", "stems", "voice"}
+# Only this computer. Tests widen this through monkeypatch; production does not
+# recognise a test client's host name.
+ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
+ALLOWED_STEPS = {6, 10, 20, 30, 40, 50}
+DEFAULT_SEED = 1234
+MAX_SEED = 2 ** 31 - 1
+MAX_ACTIVE_JOBS = 3
+# Queue slots held while an upload is still being decoded. Counting projects on
+# disk alone would let two concurrent uploads both pass the limit check.
+RESERVATIONS = set()
 
 def folder(ident):
     if not re.fullmatch(r"[0-9a-f]{32}", ident):
@@ -58,14 +69,18 @@ app = FastAPI(title="Forma local studio", lifespan=lifespan)
 @app.middleware("http")
 async def local_boundary(request: Request, call_next):
     host = (request.headers.get("host") or "").split(":")[0]
-    if host not in {"127.0.0.1", "localhost", "testserver"}:
+    if host not in ALLOWED_HOSTS:
         return JSONResponse({"detail": "This studio is available only on this computer."}, status_code=403)
     origin = request.headers.get("origin")
     if origin and urlparse(origin).netloc != request.headers.get("host"):
         return JSONResponse({"detail": "Cross-origin requests are not allowed."}, status_code=403)
     if request.headers.get("sec-fetch-site") == "cross-site":
         return JSONResponse({"detail": "Cross-site requests are not allowed."}, status_code=403)
-    if int(request.headers.get("content-length", "0")) > MAX_BYTES * 2 + 1024 * 1024:
+    try:
+        declared = int(request.headers.get("content-length", "0"))
+    except ValueError:
+        return JSONResponse({"detail": "Content-Length must be a number."}, status_code=400)
+    if declared > MAX_BYTES * 2 + 1024 * 1024:
         return JSONResponse({"detail": "Upload is too large. Maximum 50 MB per file."}, status_code=413)
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -88,7 +103,8 @@ def job(p, tool, options):
             command += ["--preset", options["preset"], "--target", str(options["target"])]
         elif tool == "voice":
             command += ["--reference", str(p / "reference.wav"), "--steps", str(options["steps"]),
-                        "--pitch", str(options["pitch"]), "--mode", options["mode"]]
+                        "--pitch", str(options["pitch"]), "--mode", options["mode"],
+                        "--seed", str(options.get("seed", DEFAULT_SEED))]
         with (p / "process.log").open("w") as log:
             process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, cwd=ROOT)
             with LOCK:
@@ -158,7 +174,8 @@ def status():
     installed = importlib.util.find_spec("demucs") is not None
     seed = (ROOT / "vendor/seed-vc/inference.py").exists()
     return {"mode": "local", "stems": installed, "voice": seed,
-            "master": True, "device": "CPU", "max_seconds": 180, "voice_seconds": 30,
+            "master": True, "device": (os.environ.get("FORMA_VOICE_DEVICE") or VOICE_DEVICE).upper(),
+            "max_seconds": 180, "voice_seconds": 30,
             "data_directory": str(DATA), "version": "0.1.0"}
 
 @app.get("/api/projects")
@@ -175,19 +192,22 @@ def project(ident: str):
 @app.post("/api/projects")
 async def create(source: UploadFile = File(...), reference: UploadFile | None = File(None),
                  tool: str = Form(...), title: str = Form(""), preset: str = Form("balanced"),
-                 target: float = Form(-14), steps: int = Form(10), pitch: int = Form(0), mode: str = Form("speech")):
+                 target: float = Form(-14), steps: int = Form(10), pitch: int = Form(0),
+                 mode: str = Form("speech"), seed: int = Form(DEFAULT_SEED)):
     if tool not in ALLOWED_TOOLS or preset not in {"balanced", "warm", "bright", "punch"}:
         raise HTTPException(422, "Choose a valid tool and preset.")
-    if not (-20 <= target <= -9 and steps in {6, 10, 20, 30} and -12 <= pitch <= 12 and mode in {"speech", "singing"}):
+    if not (-20 <= target <= -9 and steps in ALLOWED_STEPS and -12 <= pitch <= 12
+            and mode in {"speech", "singing"} and 0 <= seed <= MAX_SEED):
         raise HTTPException(422, "Invalid processing settings.")
     if tool == "voice" and reference is None:
         raise HTTPException(422, "Add a reference voice recording.")
-    with LOCK:
-        active = sum(read(p)["status"] in {"running", "queued"} for p in DATA.iterdir() if (p / "project.json").exists())
-        if active >= 3:
-            raise HTTPException(429, "Three jobs are already queued. Wait for one to finish.")
     p = DATA / uuid.uuid4().hex
-    p.mkdir()
+    with LOCK:
+        active = sum(read(q)["status"] in {"running", "queued"} for q in DATA.iterdir() if (q / "project.json").exists())
+        if active + len(RESERVATIONS) >= MAX_ACTIVE_JOBS:
+            raise HTTPException(429, f"{MAX_ACTIVE_JOBS} jobs are already queued. Wait for one to finish.")
+        p.mkdir()
+        RESERVATIONS.add(p.name)
     try:
         info = await decode(source, p / "source.wav", 30 if tool == "voice" else 180)
         if reference:
@@ -197,12 +217,17 @@ async def create(source: UploadFile = File(...), reference: UploadFile | None = 
         item = {"id": p.name, "title": (title.strip() or Path(source.filename or "Untitled recording").stem)[:100],
                 "created": time.time(), "status": "queued", "tool": tool, "message": "Waiting for the local engine",
                 "source_url": f"/api/projects/{p.name}/audio/source.wav", "outputs": [], "analysis": None,
-                "settings": {"preset": preset, "target": target, "steps": steps, "pitch": pitch, "mode": mode}, **info}
+                "settings": {"preset": preset, "target": target, "steps": steps, "pitch": pitch,
+                             "mode": mode, "seed": seed,
+                             "device": os.environ.get("FORMA_VOICE_DEVICE") or VOICE_DEVICE}, **info}
         with LOCK:
             save(p, item)
+            RESERVATIONS.discard(p.name)
         EXECUTOR.submit(job, p, tool, item["settings"])
         return item
     except BaseException:
+        with LOCK:
+            RESERVATIONS.discard(p.name)
         shutil.rmtree(p, ignore_errors=True)
         raise
 
